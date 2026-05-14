@@ -5,17 +5,24 @@ const auth = require('../middleware/auth');
 
 router.use(auth);
 
-// GET /api/checklists
+// GET /api/checklists - with pagination
 router.get('/', async (req, res) => {
   try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+    const countResult = await pool.query('SELECT COUNT(*) FROM compliance_checklists');
+    const total = parseInt(countResult.rows[0].count);
     const result = await pool.query(
       `SELECT c.*, d.name as device_name, s.code as standard_code
        FROM compliance_checklists c
        LEFT JOIN devices d ON c.device_id = d.id
        LEFT JOIN regulatory_standards s ON c.standard_id = s.id
-       ORDER BY c.created_at DESC`
+       ORDER BY c.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
     );
-    res.json(result.rows);
+    res.json({ data: result.rows, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
   } catch (err) {
     console.error('Get checklists error:', err);
     res.status(500).json({ error: 'Internal server error' });

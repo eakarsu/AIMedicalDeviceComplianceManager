@@ -2,19 +2,32 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const auth = require('../middleware/auth');
+const { aiRateLimiter } = require('../middleware/rateLimiter');
 
 router.use(auth);
+router.use(aiRateLimiter);
+
+const MODEL = process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022';
 
 async function callOpenRouter(messages) {
+  if (!process.env.OPENROUTER_API_KEY) {
+    const err = new Error('AI service unavailable: OPENROUTER_API_KEY is not configured');
+    err.status = 503;
+    throw err;
+  }
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
       'Content-Type': 'application/json',
+      'HTTP-Referer': 'http://localhost:4000',
+      'X-Title': 'AI Medical Device Compliance Manager',
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_MODEL,
+      model: MODEL,
       messages,
+      temperature: 0.3,
+      max_tokens: 3000,
     }),
   });
 
@@ -27,20 +40,40 @@ async function callOpenRouter(messages) {
   return data.choices[0].message.content;
 }
 
-async function saveAnalysis(analysisType, entityType, entityId, prompt, result, model) {
-  await pool.query(
-    'INSERT INTO ai_analyses (analysis_type, entity_type, entity_id, prompt, result, model_used) VALUES ($1,$2,$3,$4,$5,$6)',
-    [analysisType, entityType, entityId, prompt, result, model]
-  );
+/**
+ * parseAIJson: 3-strategy parser
+ * Strategy 1: direct JSON.parse
+ * Strategy 2: strip markdown code fences
+ * Strategy 3: extract first {...} block
+ */
+function parseAIJson(text) {
+  try { return JSON.parse(text.trim()); } catch (_) {}
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) { try { return JSON.parse(fenceMatch[1].trim()); } catch (_) {} }
+  const objMatch = text.match(/\{[\s\S]*\}/);
+  if (objMatch) { try { return JSON.parse(objMatch[0]); } catch (_) {} }
+  return null;
 }
 
-function buildResponse(type, result) {
+async function saveAnalysis(analysisType, entityType, entityId, prompt, result, model) {
+  try {
+    await pool.query(
+      'INSERT INTO ai_analyses (analysis_type, entity_type, entity_id, prompt, result, model_used) VALUES ($1,$2,$3,$4,$5,$6)',
+      [analysisType, entityType, entityId, prompt, result, model || MODEL]
+    );
+  } catch (err) {
+    console.error('Failed to save AI analysis:', err.message);
+  }
+}
+
+function buildResponse(type, result, structured) {
   return {
     success: true,
     analysis: {
       type,
       result,
-      model: process.env.OPENROUTER_MODEL,
+      structured: structured || null,
+      model: MODEL,
       created_at: new Date().toISOString(),
     },
   };
@@ -67,7 +100,7 @@ router.post('/compliance-analysis', async (req, res) => {
       'SELECT * FROM risk_assessments WHERE device_id = $1', [device_id]
     );
 
-    const userPrompt = `Analyze the compliance status for the following medical device and provide a detailed compliance analysis including current status, identified gaps, and specific recommendations.
+    const userPrompt = `Analyze the compliance status for this medical device. Return JSON only — no markdown, no prose.
 
 Device Information:
 - Name: ${device.name}
@@ -85,12 +118,7 @@ ${checklistsResult.rows.map(c => `- ${c.item_name} | Standard: ${c.standard_code
 Risk Assessments (${risksResult.rows.length} items):
 ${risksResult.rows.map(r => `- Hazard: ${r.hazard} | Category: ${r.risk_category} | Severity: ${r.severity} | Probability: ${r.probability} | Risk Level: ${r.risk_level} | Status: ${r.status}`).join('\n') || 'No risk assessments found.'}
 
-Please provide:
-1. Overall compliance status assessment
-2. Key compliance gaps identified
-3. Risk areas of concern
-4. Specific recommendations for achieving full compliance
-5. Priority actions to take`;
+Return JSON: { "compliance_status": "compliant|partial|non-compliant", "risk_level": "low|medium|high|critical", "gaps": [{"regulation": "", "gap_description": "", "severity": "low|medium|high|critical", "remediation": ""}], "overall_score": (0-100), "summary": "string" }`;
 
     const messages = [
       { role: 'system', content: 'You are an expert medical device regulatory compliance consultant with deep knowledge of FDA 21 CFR, ISO 13485, IEC 62304, ISO 14971, EU MDR, and other relevant standards. Provide thorough, actionable compliance analysis.' },
@@ -98,9 +126,10 @@ Please provide:
     ];
 
     const aiResult = await callOpenRouter(messages);
-    await saveAnalysis('compliance_analysis', 'device', device_id, userPrompt, aiResult, process.env.OPENROUTER_MODEL);
+    await saveAnalysis('compliance_analysis', 'device', device_id, userPrompt, aiResult);
 
-    res.json(buildResponse('compliance_analysis', aiResult));
+    const structured = parseAIJson(aiResult);
+    res.json(buildResponse('compliance_analysis', aiResult, structured));
   } catch (err) {
     console.error('Compliance analysis error:', err);
     res.status(500).json({ error: 'Failed to perform compliance analysis' });
@@ -119,7 +148,7 @@ router.post('/risk-prediction', async (req, res) => {
 
     const risksResult = await pool.query('SELECT * FROM risk_assessments WHERE device_id = $1', [device_id]);
 
-    const userPrompt = `Based on the following medical device information and existing risk assessments, predict potential risks and suggest mitigations.
+    const userPrompt = `Based on this medical device information and existing risk assessments, predict potential risks. Return JSON only.
 
 Device Information:
 - Name: ${device.name}
@@ -133,12 +162,7 @@ Device Information:
 Existing Risk Assessments (${risksResult.rows.length} items):
 ${risksResult.rows.map(r => `- Hazard: ${r.hazard} | Category: ${r.risk_category} | Severity: ${r.severity} | Probability: ${r.probability} | Risk Level: ${r.risk_level} | Mitigation: ${r.mitigation || 'None'} | Residual Risk: ${r.residual_risk_level || 'N/A'} | Status: ${r.status}`).join('\n') || 'No existing risk assessments.'}
 
-Please provide:
-1. Predicted potential risks not yet identified
-2. Analysis of existing risk mitigation effectiveness
-3. Recommended additional mitigations
-4. Risk trend predictions
-5. Priority risk areas requiring immediate attention`;
+Return JSON: { "risk_score": (0-100), "risk_category": "string", "failure_modes": ["string"], "mitigation_actions": ["string"], "priority": "immediate|short-term|long-term", "summary": "string" }`;
 
     const messages = [
       { role: 'system', content: 'You are an expert medical device risk management specialist with deep knowledge of ISO 14971, IEC 62366, and FDA guidance on risk management. Provide thorough risk predictions and mitigation strategies.' },
@@ -146,9 +170,10 @@ Please provide:
     ];
 
     const aiResult = await callOpenRouter(messages);
-    await saveAnalysis('risk_prediction', 'device', device_id, userPrompt, aiResult, process.env.OPENROUTER_MODEL);
+    await saveAnalysis('risk_prediction', 'device', device_id, userPrompt, aiResult);
 
-    res.json(buildResponse('risk_prediction', aiResult));
+    const structured = parseAIJson(aiResult);
+    res.json(buildResponse('risk_prediction', aiResult, structured));
   } catch (err) {
     console.error('Risk prediction error:', err);
     res.status(500).json({ error: 'Failed to perform risk prediction' });
@@ -1676,6 +1701,247 @@ Please provide:
   } catch (err) {
     console.error('Calibration drift analysis error:', err);
     res.status(500).json({ error: 'Failed to perform calibration drift analysis' });
+  }
+});
+
+// POST /api/ai/submission-package - 510(k) submission package generator
+router.post('/submission-package', async (req, res) => {
+  try {
+    const { deviceId } = req.body;
+    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+
+    const deviceResult = await pool.query('SELECT * FROM devices WHERE id = $1', [deviceId]);
+    if (deviceResult.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+    const device = deviceResult.rows[0];
+
+    const [checklistsResult, risksResult, docsResult] = await Promise.all([
+      pool.query('SELECT c.*, s.code as standard_code FROM compliance_checklists c LEFT JOIN regulatory_standards s ON c.standard_id = s.id WHERE c.device_id = $1', [deviceId]),
+      pool.query('SELECT hazard, risk_category, severity, risk_level, mitigation FROM risk_assessments WHERE device_id = $1', [deviceId]),
+      pool.query('SELECT title, document_type, version, status FROM documents WHERE device_id = $1', [deviceId]),
+    ]);
+
+    const userPrompt = `Generate a 510(k) submission package outline for this medical device. Return JSON only.
+
+Device:
+- Name: ${device.name}
+- Manufacturer: ${device.manufacturer}
+- Model: ${device.model_number}
+- Class: ${device.device_class}
+- FDA Clearance: ${device.fda_clearance_number || 'None'}
+- CE Marking: ${device.ce_marking ? 'Yes' : 'No'}
+- Description: ${device.description || 'N/A'}
+
+Compliance Checklists: ${checklistsResult.rows.length} items
+Risk Assessments: ${risksResult.rows.length} items
+Documents on file: ${docsResult.rows.map(d => d.title).join(', ') || 'None'}
+
+Return JSON: {
+  "executive_summary": "string",
+  "device_description": "string",
+  "intended_use": "string",
+  "substantial_equivalence_analysis": "string",
+  "performance_testing_required": ["string"],
+  "labeling_requirements": ["string"],
+  "predicate_device_comparison": "string",
+  "gaps_to_address": ["string"]
+}`;
+
+    const messages = [
+      { role: 'system', content: 'You are an expert FDA 510(k) submission specialist. When asked to return JSON, respond ONLY with valid JSON — no markdown fences, no extra text.' },
+      { role: 'user', content: userPrompt },
+    ];
+
+    const aiResult = await callOpenRouter(messages);
+    await saveAnalysis('submission_package', 'device', deviceId, userPrompt, aiResult);
+
+    const structured = parseAIJson(aiResult);
+    res.json(buildResponse('submission_package', aiResult, structured));
+  } catch (err) {
+    console.error('Submission package error:', err);
+    res.status(500).json({ error: 'Failed to generate submission package' });
+  }
+});
+
+// POST /api/ai/submission-review — pre-FDA-submission review (gap-finder)
+router.post('/submission-review', async (req, res) => {
+  try {
+    const { deviceId, submission_type, draft_summary } = req.body || {};
+    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+    const subType = submission_type || '510(k)';
+
+    const deviceResult = await pool.query('SELECT * FROM devices WHERE id = $1', [deviceId]);
+    if (deviceResult.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+    const device = deviceResult.rows[0];
+
+    const [checklistsResult, risksResult, docsResult] = await Promise.all([
+      pool.query('SELECT c.*, s.code as standard_code FROM compliance_checklists c LEFT JOIN regulatory_standards s ON c.standard_id = s.id WHERE c.device_id = $1', [deviceId]),
+      pool.query('SELECT hazard, risk_category, severity, risk_level, mitigation, status FROM risk_assessments WHERE device_id = $1', [deviceId]),
+      pool.query('SELECT title, document_type, version, status FROM documents WHERE device_id = $1', [deviceId]),
+    ]);
+
+    const userPrompt = `Perform a pre-submission review of this ${subType} package and identify blockers, weaknesses, and missing items before it reaches the FDA. Return JSON only.
+
+Device:
+- Name: ${device.name}
+- Manufacturer: ${device.manufacturer}
+- Model: ${device.model_number}
+- Class: ${device.device_class}
+- FDA Clearance: ${device.fda_clearance_number || 'None'}
+
+Checklists: ${checklistsResult.rows.length} items, ${checklistsResult.rows.filter(c => c.status !== 'completed').length} open
+Risks: ${risksResult.rows.length} (${risksResult.rows.filter(r => ['high','critical'].includes(r.risk_level)).length} high/critical)
+Documents on file: ${docsResult.rows.length} (${docsResult.rows.filter(d => d.status !== 'approved').length} not approved)
+Submitter draft summary: ${draft_summary || '(not provided)'}
+
+Return JSON:
+{
+  "submission_type": "${subType}",
+  "readiness_score": <0-100>,
+  "verdict": "ready_to_submit|conditional|not_ready",
+  "blockers": [{"area":"...","issue":"...","severity":"low|medium|high|critical","action":"..."}],
+  "weaknesses": [{"area":"...","issue":"...","action":"..."}],
+  "strengths": ["..."],
+  "missing_artifacts": ["..."],
+  "predicate_concerns": ["..."],
+  "recommended_next_steps": ["..."],
+  "estimated_remaining_effort_weeks": <number>
+}`;
+
+    const messages = [
+      { role: 'system', content: 'You are a senior FDA regulatory submission reviewer with 20+ years of experience auditing 510(k), De Novo, and PMA packages before they reach the agency. Return ONLY valid JSON.' },
+      { role: 'user', content: userPrompt },
+    ];
+    const aiResult = await callOpenRouter(messages);
+    await saveAnalysis('submission_review', 'device', deviceId, userPrompt, aiResult);
+    const structured = parseAIJson(aiResult);
+    res.json(buildResponse('submission_review', aiResult, structured));
+  } catch (err) {
+    if (err.status === 503) return res.status(503).json({ error: err.message });
+    console.error('Submission review error:', err);
+    res.status(500).json({ error: 'Failed to perform submission review' });
+  }
+});
+
+// POST /api/ai/recall-response — automated recall planning
+router.post('/recall-response', async (req, res) => {
+  try {
+    const { deviceId, recall_reason, classification, units_affected, geographic_scope } = req.body || {};
+    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+    if (!recall_reason) return res.status(400).json({ error: 'recall_reason is required' });
+
+    const deviceResult = await pool.query('SELECT * FROM devices WHERE id = $1', [deviceId]);
+    if (deviceResult.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+    const device = deviceResult.rows[0];
+
+    const userPrompt = `Generate a recall response and field-action plan for this medical device. Return JSON only.
+
+Device:
+- Name: ${device.name}
+- Manufacturer: ${device.manufacturer}
+- Model: ${device.model_number}
+- Class: ${device.device_class}
+- FDA Clearance: ${device.fda_clearance_number || 'None'}
+
+Recall trigger:
+- Reason: ${recall_reason}
+- Suggested classification: ${classification || 'undetermined'} (Class I = serious harm/death, II = temporary, III = unlikely harm)
+- Estimated units affected: ${units_affected || 'unknown'}
+- Geographic scope: ${geographic_scope || 'undetermined'}
+
+Return JSON:
+{
+  "recommended_recall_class": "I|II|III",
+  "recommended_recall_class_rationale": "...",
+  "field_action_type": "removal|correction|safety_alert",
+  "regulatory_obligations": [{"jurisdiction":"FDA|EU|Health Canada|...","requirement":"...","deadline_days":<number>}],
+  "internal_actions": [{"step":"...","owner":"...","due_in_days":<number>}],
+  "customer_communications": {"channels":["..."], "key_messages":["..."], "draft_letter":"..."},
+  "press_release_required": true,
+  "draft_press_release": "...",
+  "field_correction_steps": ["..."],
+  "effectiveness_check_plan": "...",
+  "success_criteria": ["..."],
+  "expected_capa_links": ["..."]
+}`;
+
+    const messages = [
+      { role: 'system', content: 'You are an expert medical-device recall coordinator with deep knowledge of FDA 21 CFR Part 7, EU MDR field-safety-corrective-action requirements, and ISO 13485. Return ONLY valid JSON.' },
+      { role: 'user', content: userPrompt },
+    ];
+    const aiResult = await callOpenRouter(messages);
+    await saveAnalysis('recall_response', 'device', deviceId, userPrompt, aiResult);
+    const structured = parseAIJson(aiResult);
+    res.json(buildResponse('recall_response', aiResult, structured));
+  } catch (err) {
+    if (err.status === 503) return res.status(503).json({ error: err.message });
+    console.error('Recall response error:', err);
+    res.status(500).json({ error: 'Failed to generate recall response plan' });
+  }
+});
+
+// POST /api/ai/complaint-analysis — analyze a customer/safety complaint
+router.post('/complaint-analysis', async (req, res) => {
+  try {
+    const { deviceId, complaint_text, reporter_role, severity_reported, occurrence_date } = req.body || {};
+    if (!complaint_text) return res.status(400).json({ error: 'complaint_text is required' });
+
+    let device = null;
+    if (deviceId) {
+      const deviceResult = await pool.query('SELECT * FROM devices WHERE id = $1', [deviceId]);
+      if (deviceResult.rows.length > 0) device = deviceResult.rows[0];
+    }
+
+    let recentNcrs = [];
+    if (deviceId) {
+      try {
+        const ncrRes = await pool.query(
+          "SELECT id, source, description, severity, status FROM nonconformances WHERE device_id = $1 ORDER BY id DESC LIMIT 10",
+          [deviceId]
+        );
+        recentNcrs = ncrRes.rows;
+      } catch (_) { /* table optional */ }
+    }
+
+    const userPrompt = `Analyze this medical device complaint. Decide whether it is reportable, classify severity, and recommend next steps. Return JSON only.
+
+Device: ${device ? `${device.name} (${device.manufacturer} ${device.model_number}, Class ${device.device_class})` : 'unspecified'}
+Reporter role: ${reporter_role || 'unspecified'}
+Reported severity: ${severity_reported || 'unspecified'}
+Occurrence date: ${occurrence_date || 'unspecified'}
+
+Complaint text:
+${complaint_text}
+
+Recent related NCRs (${recentNcrs.length}):
+${recentNcrs.map(n => `- #${n.id} [${n.severity}] ${n.description || ''}`).join('\n') || 'None'}
+
+Return JSON:
+{
+  "complaint_category": "device_malfunction|user_error|labeling|software|adverse_event|other",
+  "severity_assessment": "low|medium|high|critical",
+  "patient_harm_indicators": ["..."],
+  "mdr_reportability": {"required": true, "rationale": "...", "deadline_days": <number>},
+  "vigilance_reportability_eu": {"required": true, "rationale": "..."},
+  "root_cause_hypotheses": ["..."],
+  "investigation_steps": ["..."],
+  "containment_actions": ["..."],
+  "capa_recommendation": "open_capa|monitor|close_with_explanation",
+  "trend_signal": {"pattern_detected": false, "details": "..."},
+  "summary": "2-3 sentence summary"
+}`;
+
+    const messages = [
+      { role: 'system', content: 'You are an expert medical-device complaint handler / MDR specialist. Return ONLY valid JSON.' },
+      { role: 'user', content: userPrompt },
+    ];
+    const aiResult = await callOpenRouter(messages);
+    await saveAnalysis('complaint_analysis', 'device', deviceId || 0, userPrompt, aiResult);
+    const structured = parseAIJson(aiResult);
+    res.json(buildResponse('complaint_analysis', aiResult, structured));
+  } catch (err) {
+    if (err.status === 503) return res.status(503).json({ error: err.message });
+    console.error('Complaint analysis error:', err);
+    res.status(500).json({ error: 'Failed to analyze complaint' });
   }
 });
 

@@ -306,6 +306,51 @@ const CATEGORIES = [
       },
     ],
   },
+  {
+    id: 'fieldAction', label: 'Submission & Field Action', icon: FiZap, color: '#0ea5e9',
+    tools: [
+      { id: 'submission-review', title: 'Submission Review', desc: 'Pre-submission gap review of a 510(k) / De Novo / PMA package', endpoint: '/ai/submission-review',
+        inputs: [
+          { key: 'deviceId', type: 'device' },
+          { key: 'submission_type', type: 'text', label: 'Submission Type', placeholder: '510(k), De Novo, PMA', defaultValue: '510(k)' },
+          { key: 'draft_summary', type: 'text', label: 'Draft Summary (optional)', placeholder: 'Short description of the submission scope...' },
+        ],
+        samples: [
+          { label: 'Cardiac Pacemaker — 510(k)', values: { deviceId: 1, submission_type: '510(k)' } },
+          { label: 'Surgical Robot — De Novo', values: { deviceId: 4, submission_type: 'De Novo' } },
+          { label: 'Insulin Pump — 510(k)', values: { deviceId: 2, submission_type: '510(k)' } },
+        ],
+      },
+      { id: 'recall-response', title: 'Recall Response', desc: 'Generate a field-action / recall response plan for a device', endpoint: '/ai/recall-response',
+        inputs: [
+          { key: 'deviceId', type: 'device' },
+          { key: 'recall_reason', type: 'text', label: 'Recall Reason', placeholder: 'Battery failure observed in 0.4% of units...' },
+          { key: 'classification', type: 'text', label: 'Suggested Class (I/II/III, optional)', placeholder: 'II' },
+          { key: 'units_affected', type: 'text', label: 'Units Affected (optional)', placeholder: '12,000' },
+          { key: 'geographic_scope', type: 'text', label: 'Geographic Scope (optional)', placeholder: 'US, EU' },
+        ],
+        samples: [
+          { label: 'Pacemaker — battery defect', values: { deviceId: 1, recall_reason: 'Premature battery depletion observed in 0.5% of devices implanted between 2024-Q1 and 2024-Q3.', classification: 'II', units_affected: '8500', geographic_scope: 'US, EU' } },
+          { label: 'Ventilator — software bug', values: { deviceId: 7, recall_reason: 'Software bug causes alarm to be silenced for 30 seconds after a pressure spike. No injuries reported yet.', classification: 'I', geographic_scope: 'US' } },
+          { label: 'Insulin pump — labeling error', values: { deviceId: 2, recall_reason: 'IFU mistranslation in Spanish manual could lead to incorrect dosing.', classification: 'III', geographic_scope: 'LATAM' } },
+        ],
+      },
+      { id: 'complaint-analysis', title: 'Complaint Analysis', desc: 'Triage a customer/safety complaint, decide MDR reportability', endpoint: '/ai/complaint-analysis',
+        inputs: [
+          { key: 'deviceId', type: 'device', label: 'Device (optional)' },
+          { key: 'complaint_text', type: 'text', label: 'Complaint Text', placeholder: 'Describe the complaint in detail...' },
+          { key: 'reporter_role', type: 'text', label: 'Reporter Role (optional)', placeholder: 'patient, clinician, distributor' },
+          { key: 'severity_reported', type: 'text', label: 'Reported Severity (optional)', placeholder: 'low/medium/high' },
+          { key: 'occurrence_date', type: 'text', label: 'Occurrence Date (optional)', placeholder: 'YYYY-MM-DD' },
+        ],
+        samples: [
+          { label: 'Pacemaker — clinician complaint', values: { deviceId: 1, complaint_text: 'Patient experienced syncope; clinician reports the device failed to pace appropriately during atrial fibrillation episode.', reporter_role: 'clinician', severity_reported: 'high' } },
+          { label: 'Ventilator — alarm complaint', values: { deviceId: 7, complaint_text: 'Hospital reports intermittent silent failure of high-pressure alarm during BiPAP mode.', reporter_role: 'hospital', severity_reported: 'high' } },
+          { label: 'Insulin pump — labeling complaint', values: { deviceId: 2, complaint_text: 'Patient reports they followed Spanish IFU and over-dosed by 2x; no hospitalization.', reporter_role: 'patient', severity_reported: 'medium' } },
+        ],
+      },
+    ],
+  },
 ];
 
 // ─── Format AI Output ───────────────────────────────────────────────────────
@@ -397,6 +442,107 @@ const styles = {
     display: 'inline-flex', alignItems: 'center', gap: 6,
   },
 };
+
+// ─── Structured Result Displays ─────────────────────────────────────────────
+
+const COMPLIANCE_COLORS = { compliant: '#16a34a', partial: '#ca8a04', 'non-compliant': '#dc2626' };
+const RISK_LEVEL_COLORS = { low: '#16a34a', medium: '#ca8a04', high: '#dc2626', critical: '#7c3aed' };
+const SEVERITY_COLORS = { low: '#16a34a', medium: '#ca8a04', high: '#dc2626', critical: '#7c3aed' };
+
+function ComplianceStructuredDisplay({ data }) {
+  if (!data) return null;
+  const status = (data.compliance_status || '').toLowerCase();
+  const riskLevel = (data.risk_level || '').toLowerCase();
+  const score = data.overall_score || 0;
+  const sColor = COMPLIANCE_COLORS[status] || '#6b7280';
+  const rColor = RISK_LEVEL_COLORS[riskLevel] || '#6b7280';
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+        <span style={{ background: sColor, color: '#fff', padding: '4px 14px', borderRadius: 20, fontWeight: 700, fontSize: 13, textTransform: 'capitalize' }}>
+          {data.compliance_status || 'unknown'}
+        </span>
+        <span style={{ background: rColor + '20', color: rColor, padding: '4px 14px', borderRadius: 20, fontWeight: 700, fontSize: 13, textTransform: 'capitalize', border: `1px solid ${rColor}40` }}>
+          {data.risk_level || 'unknown'} risk
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 100, height: 8, background: '#e5e7eb', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ width: score + '%', height: '100%', background: sColor, borderRadius: 4 }} />
+          </div>
+          <span style={{ fontWeight: 700, color: sColor }}>{score}/100</span>
+        </div>
+      </div>
+      {data.summary && <p style={{ fontSize: 14, color: '#374151', margin: '0 0 16px' }}>{data.summary}</p>}
+      {data.gaps?.length > 0 && (
+        <div>
+          <strong style={{ fontSize: 13, color: '#374151' }}>Compliance Gaps ({data.gaps.length})</strong>
+          <div style={{ marginTop: 8 }}>
+            {data.gaps.map((g, i) => (
+              <div key={i} style={{ padding: 12, border: `1px solid ${SEVERITY_COLORS[g.severity] || '#e5e7eb'}30`, borderRadius: 8, marginBottom: 8, background: '#fafafa' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, background: SEVERITY_COLORS[g.severity] || '#e5e7eb', color: '#fff', padding: '1px 8px', borderRadius: 10, textTransform: 'uppercase' }}>
+                    {g.severity}
+                  </span>
+                  {g.regulation && <span style={{ fontSize: 12, color: '#6b7280' }}>{g.regulation}</span>}
+                </div>
+                <p style={{ margin: 0, fontSize: 13, color: '#374151' }}>{g.gap_description}</p>
+                {g.remediation && <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6b7280' }}>Remediation: {g.remediation}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RiskStructuredDisplay({ data }) {
+  if (!data) return null;
+  const score = data.risk_score || 0;
+  const priority = data.priority || 'long-term';
+  const priorityColors = { immediate: '#dc2626', 'short-term': '#ca8a04', 'long-term': '#16a34a' };
+  const pColor = priorityColors[priority] || '#6b7280';
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 120, height: 10, background: '#e5e7eb', borderRadius: 5, overflow: 'hidden' }}>
+            <div style={{ width: score + '%', height: '100%', background: score >= 70 ? '#dc2626' : score >= 40 ? '#ca8a04' : '#16a34a', borderRadius: 5 }} />
+          </div>
+          <strong style={{ fontSize: 14 }}>Risk Score: {score}/100</strong>
+        </div>
+        <span style={{ background: pColor, color: '#fff', padding: '4px 14px', borderRadius: 20, fontWeight: 700, fontSize: 12, textTransform: 'capitalize' }}>
+          Priority: {priority}
+        </span>
+        {data.risk_category && <span style={{ fontSize: 13, color: '#6b7280' }}>{data.risk_category}</span>}
+      </div>
+      {data.summary && <p style={{ fontSize: 14, color: '#374151', margin: '0 0 12px' }}>{data.summary}</p>}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        {data.failure_modes?.length > 0 && (
+          <div>
+            <strong style={{ fontSize: 13, color: '#dc2626' }}>Failure Modes</strong>
+            <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+              {data.failure_modes.map((f, i) => <li key={i} style={{ fontSize: 13, marginBottom: 4 }}>{f}</li>)}
+            </ul>
+          </div>
+        )}
+        {data.mitigation_actions?.length > 0 && (
+          <div>
+            <strong style={{ fontSize: 13, color: '#16a34a' }}>Mitigation Actions</strong>
+            {data.mitigation_actions.map((a, i) => (
+              <label key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 6, cursor: 'pointer' }}>
+                <input type="checkbox" style={{ marginTop: 2 }} />
+                <span style={{ fontSize: 13 }}>{a}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
@@ -819,12 +965,22 @@ export default function AIToolsPage() {
                     <FiCpu size={14} /> AI Analysis Complete
                   </div>
                   <div style={{ fontSize: 12, color: '#999' }}>
-                    <span>Model: {result.model || 'Claude Haiku'}</span>
+                    <span>Model: {result.model || 'claude-3-5-sonnet'}</span>
                     <span style={{ marginLeft: 12 }}>
                       {result.created_at ? new Date(result.created_at).toLocaleString() : new Date().toLocaleString()}
                     </span>
                   </div>
                 </div>
+
+                {/* Structured compliance display */}
+                {activeToolId === 'compliance-analysis' && result.structured && (
+                  <ComplianceStructuredDisplay data={result.structured} />
+                )}
+                {/* Structured risk display */}
+                {activeToolId === 'risk-prediction' && result.structured && (
+                  <RiskStructuredDisplay data={result.structured} />
+                )}
+
                 <div className="ai-result-body">
                   {formatAIOutput(result.result || result.content || (typeof result === 'string' ? result : JSON.stringify(result)))}
                 </div>

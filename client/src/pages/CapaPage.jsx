@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   FiPlus, FiSearch, FiEdit2, FiTrash2, FiX, FiAlertTriangle,
-  FiLoader, FiChevronDown
+  FiLoader, FiChevronDown, FiCheck
 } from 'react-icons/fi';
 import {
-  getCapas, getCapa, createCapa, updateCapa, deleteCapa, getDevices
+  getCapas, getCapa, createCapa, updateCapa, deleteCapa, getDevices, closeCapa
 } from '../services/api';
 
 const STATUS_COLORS = {
@@ -76,6 +76,10 @@ export default function CapaPage() {
   const [form, setForm] = useState(emptyForm);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [showClose, setShowClose] = useState(false);
+  const [closureReason, setClosureReason] = useState('');
+  const [effectivenessVerified, setEffectivenessVerified] = useState(false);
+  const [closingCapa, setClosingCapa] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -160,6 +164,22 @@ export default function CapaPage() {
       setSelected(null);
       await load();
     } catch (e) { alert('Delete failed'); }
+  };
+
+  const handleClose = async () => {
+    setClosingCapa(true);
+    try {
+      await closeCapa(selected.id, { closure_reason: closureReason, effectiveness_verified: effectivenessVerified });
+      setShowClose(false);
+      setShowDetail(false);
+      setSelected(null);
+      setClosureReason('');
+      setEffectivenessVerified(false);
+      await load();
+    } catch (e) {
+      alert(e.response?.data?.error || 'Close CAPA failed. You may not have sufficient permissions.');
+    }
+    setClosingCapa(false);
   };
 
   const Field = ({ label, val }) => (
@@ -260,7 +280,19 @@ export default function CapaPage() {
               <Field label="Root Cause" val={selected.root_cause} />
               <Field label="Action Plan" val={selected.action_plan} />
             </div>
-            <div style={{ padding: '16px 24px', borderTop: '1px solid #e5e7eb', display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+            {selected.closure_reason && (
+              <div style={{ padding: '12px 24px', background: '#f0fdf4', borderRadius: 8, margin: '0 24px 16px' }}>
+                <strong style={{ fontSize: 12, color: '#16a34a' }}>CLOSED</strong>
+                <p style={{ margin: '4px 0 0', fontSize: 13 }}>Reason: {selected.closure_reason}</p>
+                {selected.effectiveness_verified && <p style={{ margin: '4px 0 0', fontSize: 12, color: '#16a34a' }}>Effectiveness verified</p>}
+              </div>
+            )}
+            <div style={{ padding: '16px 24px', borderTop: '1px solid #e5e7eb', display: 'flex', gap: 12, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              {selected.status !== 'closed' && (
+                <button onClick={() => setShowClose(true)} style={{ ...btnPrimary, background: '#16a34a' }}>
+                  <FiCheck size={14} style={{ marginRight: 4 }} />Close CAPA
+                </button>
+              )}
               <button onClick={() => openEdit(selected)} style={btnPrimary}><FiEdit2 size={14} style={{ marginRight: 4 }} />Edit</button>
               <button onClick={() => setShowDelete(true)} style={btnDanger}><FiTrash2 size={14} style={{ marginRight: 4 }} />Delete</button>
             </div>
@@ -362,6 +394,51 @@ export default function CapaPage() {
               <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
                 <button onClick={() => setShowDelete(false)} style={btnSecondary}>Cancel</button>
                 <button onClick={handleDelete} style={btnDanger}>Delete</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Close CAPA Dialog ─────────────────────────────────────────────── */}
+      {showClose && (
+        <div style={overlay} onClick={() => setShowClose(false)}>
+          <div style={{ ...modalBox, maxWidth: 500 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ padding: '20px 24px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#16a34a' }}>Close CAPA</h2>
+              <FiX size={20} style={{ cursor: 'pointer', color: '#6b7280' }} onClick={() => setShowClose(false)} />
+            </div>
+            <div style={{ padding: 24 }}>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#374151' }}>
+                  Closure Reason *
+                </label>
+                <textarea
+                  value={closureReason}
+                  onChange={e => setClosureReason(e.target.value)}
+                  placeholder="Describe the actions taken and why this CAPA is being closed..."
+                  rows={4}
+                  style={{ ...inputStyle, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
+                />
+              </div>
+              <label style={{ display: 'flex', gap: 10, alignItems: 'center', cursor: 'pointer', marginBottom: 20 }}>
+                <input
+                  type="checkbox"
+                  checked={effectivenessVerified}
+                  onChange={e => setEffectivenessVerified(e.target.checked)}
+                  style={{ width: 16, height: 16 }}
+                />
+                <span style={{ fontSize: 14, color: '#374151' }}>Effectiveness has been verified</span>
+              </label>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+                <button onClick={() => setShowClose(false)} style={btnSecondary}>Cancel</button>
+                <button
+                  onClick={handleClose}
+                  disabled={closingCapa || !closureReason.trim()}
+                  style={{ ...btnPrimary, background: '#16a34a', opacity: (!closureReason.trim() || closingCapa) ? 0.6 : 1 }}
+                >
+                  {closingCapa ? 'Closing...' : 'Confirm Close'}
+                </button>
               </div>
             </div>
           </div>

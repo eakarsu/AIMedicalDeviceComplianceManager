@@ -2,14 +2,29 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const auth = require('../middleware/auth');
+const requireRole = require('../middleware/requireRole');
 
 router.use(auth);
 
-// GET /api/devices
+// GET /api/devices - with pagination
 router.get('/', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM devices ORDER BY created_at DESC');
-    res.json(result.rows);
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+
+    const countResult = await pool.query('SELECT COUNT(*) FROM devices');
+    const total = parseInt(countResult.rows[0].count);
+
+    const result = await pool.query(
+      'SELECT * FROM devices ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+      [limit, offset]
+    );
+
+    res.json({
+      data: result.rows,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
   } catch (err) {
     console.error('Get devices error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -88,8 +103,8 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/devices/:id
-router.delete('/:id', async (req, res) => {
+// DELETE /api/devices/:id - admin/quality_manager only
+router.delete('/:id', requireRole('admin', 'quality_manager'), async (req, res) => {
   try {
     const result = await pool.query('DELETE FROM devices WHERE id = $1 RETURNING *', [req.params.id]);
     if (result.rows.length === 0) {

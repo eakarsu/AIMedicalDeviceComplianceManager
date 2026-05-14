@@ -13,16 +13,23 @@ function calculateRiskLevel(severity, probability) {
   return 'Low';
 }
 
-// GET /api/risk-assessments
+// GET /api/risk-assessments - with pagination
 router.get('/', async (req, res) => {
   try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+    const countResult = await pool.query('SELECT COUNT(*) FROM risk_assessments');
+    const total = parseInt(countResult.rows[0].count);
     const result = await pool.query(
       `SELECT r.*, d.name as device_name
        FROM risk_assessments r
        LEFT JOIN devices d ON r.device_id = d.id
-       ORDER BY r.created_at DESC`
+       ORDER BY r.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
     );
-    res.json(result.rows);
+    res.json({ data: result.rows, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
   } catch (err) {
     console.error('Get risk assessments error:', err);
     res.status(500).json({ error: 'Internal server error' });

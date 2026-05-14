@@ -5,16 +5,23 @@ const auth = require('../middleware/auth');
 
 router.use(auth);
 
-// GET /api/nonconformance
+// GET /api/nonconformance - with pagination
 router.get('/', async (req, res) => {
   try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+    const countResult = await pool.query('SELECT COUNT(*) FROM nonconformance_reports');
+    const total = parseInt(countResult.rows[0].count);
     const result = await pool.query(
       `SELECT n.*, d.name as device_name
        FROM nonconformance_reports n
        LEFT JOIN devices d ON n.device_id = d.id
-       ORDER BY n.created_at DESC`
+       ORDER BY n.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
     );
-    res.json(result.rows);
+    res.json({ data: result.rows, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
   } catch (err) {
     console.error('Get nonconformance reports error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -96,6 +103,45 @@ router.put('/:id', async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Update nonconformance report error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/nonconformance/:id/create-capa - Auto-link NCR to a new CAPA
+router.post('/:id/create-capa', async (req, res) => {
+  try {
+    const ncrResult = await pool.query('SELECT * FROM nonconformance_reports WHERE id = $1', [req.params.id]);
+    if (ncrResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Nonconformance report not found' });
+    }
+    const ncr = ncrResult.rows[0];
+
+    // Due date: 30 days from now
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + 30);
+
+    const capaResult = await pool.query(
+      `INSERT INTO capa_records (title, type, source, source_id, device_id, description, status, priority, assigned_to, due_date)
+       VALUES ($1, 'corrective', 'nonconformance', $2, $3, $4, 'open', $5, $6, $7) RETURNING *`,
+      [
+        `CAPA for NCR ${ncr.ncr_number}: ${ncr.title}`,
+        ncr.id,
+        ncr.device_id,
+        `Auto-created from Nonconformance Report ${ncr.ncr_number}. Description: ${ncr.description || 'N/A'}`,
+        ncr.severity === 'critical' ? 'critical' : ncr.severity === 'major' ? 'high' : 'medium',
+        ncr.assigned_to || null,
+        dueDate.toISOString().split('T')[0],
+      ]
+    );
+
+    await pool.query(
+      'INSERT INTO audit_logs (user_name, action, entity_type, entity_id, details, ip_address) VALUES ($1,$2,$3,$4,$5,$6)',
+      [req.user.name, 'CREATE', 'capa_record', capaResult.rows[0].id, `Auto-created CAPA from NCR: ${ncr.ncr_number}`, req.ip]
+    );
+
+    res.status(201).json(capaResult.rows[0]);
+  } catch (err) {
+    console.error('Create CAPA from NCR error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

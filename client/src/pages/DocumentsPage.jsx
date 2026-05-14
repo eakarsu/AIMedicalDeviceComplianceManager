@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { FiPlus, FiSearch, FiX, FiEdit2, FiTrash2, FiFileText } from 'react-icons/fi';
-import { getDocuments, createDocument, updateDocument, deleteDocument } from '../services/api';
+import { FiPlus, FiSearch, FiX, FiEdit2, FiTrash2, FiFileText, FiClock, FiSave } from 'react-icons/fi';
+import { getDocuments, createDocument, updateDocument, deleteDocument, getDocumentVersions, saveDocumentVersion } from '../services/api';
 
 const statusColors = { draft: '#ca8a04', review: '#2563eb', approved: '#16a34a', obsolete: '#6b7280' };
 const statusBg = { draft: '#fef9c3', review: '#dbeafe', approved: '#dcfce7', obsolete: '#f3f4f6' };
@@ -29,6 +29,12 @@ export default function DocumentsPage() {
   const [formData, setFormData] = useState(emptyDocument);
   const [editingId, setEditingId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [versions, setVersions] = useState([]);
+  const [showVersions, setShowVersions] = useState(false);
+  const [showNewVersion, setShowNewVersion] = useState(false);
+  const [versionContent, setVersionContent] = useState('');
+  const [versionReason, setVersionReason] = useState('');
+  const [savingVersion, setSavingVersion] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -74,6 +80,26 @@ export default function DocumentsPage() {
   const handleDelete = async (id) => {
     try { await deleteDocument(id); setConfirmDelete(null); setShowDetail(false); fetchData(); }
     catch (err) { console.error(err); }
+  };
+
+  const handleViewVersions = async () => {
+    try {
+      const data = await getDocumentVersions(selected.id);
+      setVersions(data);
+      setShowVersions(true);
+    } catch (err) { console.error(err); }
+  };
+
+  const handleSaveVersion = async () => {
+    setSavingVersion(true);
+    try {
+      await saveDocumentVersion(selected.id, { content: versionContent, change_reason: versionReason });
+      setShowNewVersion(false);
+      setVersionContent('');
+      setVersionReason('');
+      handleViewVersions(); // refresh versions list
+    } catch (err) { console.error(err); }
+    setSavingVersion(false);
   };
 
   const Field = ({ label, name, type = 'text', options }) => (
@@ -168,7 +194,13 @@ export default function DocumentsPage() {
                 }}>{selected.content}</pre>
               </div>
             )}
-            <div style={{ display: 'flex', gap: 8, marginTop: 20, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, marginTop: 20, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button onClick={handleViewVersions} style={{ ...btnSecondary, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <FiClock size={14} /> Version History
+              </button>
+              <button onClick={() => setShowNewVersion(true)} style={{ ...btnPrimary, background: '#7c3aed', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <FiSave size={14} /> Save New Version
+              </button>
               <button onClick={() => openEdit(selected)} style={btnPrimary}><FiEdit2 size={14} /> Edit</button>
               <button onClick={() => setConfirmDelete(selected.id)} style={btnDanger}><FiTrash2 size={14} /> Delete</button>
             </div>
@@ -220,6 +252,75 @@ export default function DocumentsPage() {
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
               <button onClick={() => setConfirmDelete(null)} style={btnSecondary}>Cancel</button>
               <button onClick={() => handleDelete(confirmDelete)} style={btnDanger}>Delete</button>
+            </div>
+          </div>
+        </Overlay>
+      )}
+
+      {/* Version History Modal */}
+      {showVersions && (
+        <Overlay onClose={() => setShowVersions(false)}>
+          <div style={{ ...modalStyle, maxWidth: 640 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Version History</h2>
+              <button onClick={() => setShowVersions(false)} style={btnIcon}><FiX size={18} /></button>
+            </div>
+            {versions.length === 0 ? (
+              <p style={{ color: '#9ca3af', fontSize: 14 }}>No versions saved yet.</p>
+            ) : (
+              <div>
+                {versions.map(v => (
+                  <div key={v.id} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 14, marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>Version {v.version_number}</span>
+                      <span style={{ fontSize: 12, color: '#9ca3af' }}>{new Date(v.created_at).toLocaleString()}</span>
+                    </div>
+                    {v.change_reason && <p style={{ fontSize: 13, color: '#555', margin: '0 0 6px' }}>Reason: {v.change_reason}</p>}
+                    {v.content && (
+                      <pre style={{ margin: 0, fontSize: 12, background: '#f9fafb', padding: 8, borderRadius: 6, maxHeight: 100, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                        {v.content}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Overlay>
+      )}
+
+      {/* Save New Version Modal */}
+      {showNewVersion && (
+        <Overlay onClose={() => setShowNewVersion(false)}>
+          <div style={{ ...modalStyle, maxWidth: 560 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Save New Version</h2>
+              <button onClick={() => setShowNewVersion(false)} style={btnIcon}><FiX size={18} /></button>
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>Change Reason</label>
+              <input
+                value={versionReason}
+                onChange={e => setVersionReason(e.target.value)}
+                placeholder="Why are you saving this version?"
+                style={inputStyle}
+              />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>Version Content (optional)</label>
+              <textarea
+                value={versionContent}
+                onChange={e => setVersionContent(e.target.value)}
+                rows={6}
+                placeholder="Paste the document content for this version..."
+                style={{ ...inputStyle, resize: 'vertical' }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowNewVersion(false)} style={btnSecondary}>Cancel</button>
+              <button onClick={handleSaveVersion} disabled={savingVersion} style={btnPrimary}>
+                {savingVersion ? 'Saving...' : 'Save Version'}
+              </button>
             </div>
           </div>
         </Overlay>

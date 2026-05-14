@@ -5,16 +5,23 @@ const auth = require('../middleware/auth');
 
 router.use(auth);
 
-// GET /api/change-controls
+// GET /api/change-controls - with pagination
 router.get('/', async (req, res) => {
   try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+    const countResult = await pool.query('SELECT COUNT(*) FROM change_controls');
+    const total = parseInt(countResult.rows[0].count);
     const result = await pool.query(
       `SELECT cc.*, d.name as device_name
        FROM change_controls cc
        LEFT JOIN devices d ON cc.device_id = d.id
-       ORDER BY cc.created_at DESC`
+       ORDER BY cc.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
     );
-    res.json(result.rows);
+    res.json({ data: result.rows, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
   } catch (err) {
     console.error('Get change controls error:', err);
     res.status(500).json({ error: 'Internal server error' });

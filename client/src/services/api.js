@@ -203,4 +203,37 @@ export const createCalibration = (payload) => calibrationService.create(payload)
 export const updateCalibration = (id, payload) => calibrationService.update(id, payload);
 export const deleteCalibration = (id) => calibrationService.delete(id);
 
+// ─── Document Versions ───────────────────────────────────────────────────────
+
+export const getDocumentVersions = async (documentId) => {
+  const { data } = await api.get(`/documents/${documentId}/versions`);
+  return data;
+};
+
+export const saveDocumentVersion = async (documentId, payload) => {
+  const { data } = await api.post(`/documents/${documentId}/version`, payload);
+  return data;
+};
+
+// ─── CAPA Closure ─────────────────────────────────────────────────────────────
+
+export const closeCapa = async (id, payload) => {
+  const { data } = await api.put(`/capa/${id}/close`, payload);
+  return data;
+};
+
+// ─── NCR → CAPA Autolink ─────────────────────────────────────────────────────
+
+export const createCapaFromNcr = async (ncrId) => {
+  const { data } = await api.post(`/nonconformance/${ncrId}/create-capa`);
+  return data;
+};
+
+// ─── AI Submission Package ───────────────────────────────────────────────────
+
+export const generateSubmissionPackage = async (deviceId) => {
+  const { data } = await api.post(`/ai/submission-package`, { deviceId });
+  return data;
+};
+
 export default api;

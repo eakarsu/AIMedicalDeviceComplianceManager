@@ -5,16 +5,23 @@ const auth = require('../middleware/auth');
 
 router.use(auth);
 
-// GET /api/calibration
+// GET /api/calibration - with pagination
 router.get('/', async (req, res) => {
   try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+    const countResult = await pool.query('SELECT COUNT(*) FROM calibration_records');
+    const total = parseInt(countResult.rows[0].count);
     const result = await pool.query(
       `SELECT cal.*, d.name as device_name
        FROM calibration_records cal
        LEFT JOIN devices d ON cal.device_id = d.id
-       ORDER BY cal.created_at DESC`
+       ORDER BY cal.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
     );
-    res.json(result.rows);
+    res.json({ data: result.rows, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
   } catch (err) {
     console.error('Get calibration records error:', err);
     res.status(500).json({ error: 'Internal server error' });

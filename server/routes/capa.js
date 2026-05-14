@@ -2,19 +2,33 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const auth = require('../middleware/auth');
+const requireRole = require('../middleware/requireRole');
 
 router.use(auth);
 
-// GET /api/capa
+// GET /api/capa - with pagination
 router.get('/', async (req, res) => {
   try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+
+    const countResult = await pool.query('SELECT COUNT(*) FROM capa_records');
+    const total = parseInt(countResult.rows[0].count);
+
     const result = await pool.query(
       `SELECT c.*, d.name as device_name
        FROM capa_records c
        LEFT JOIN devices d ON c.device_id = d.id
-       ORDER BY c.created_at DESC`
+       ORDER BY c.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
     );
-    res.json(result.rows);
+
+    res.json({
+      data: result.rows,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
   } catch (err) {
     console.error('Get CAPA records error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -91,8 +105,44 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/capa/:id
-router.delete('/:id', async (req, res) => {
+// PUT /api/capa/:id/close - CAPA closure workflow (admin/quality_manager only)
+router.put('/:id/close', requireRole('admin', 'quality_manager'), async (req, res) => {
+  try {
+    const { closure_reason, effectiveness_verified } = req.body;
+
+    const existing = await pool.query('SELECT * FROM capa_records WHERE id = $1', [req.params.id]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'CAPA record not found' });
+    }
+
+    const result = await pool.query(
+      `UPDATE capa_records
+       SET status='closed', closed_at=NOW(), closure_reason=$1, effectiveness_verified=$2, updated_at=NOW()
+       WHERE id=$3 RETURNING *`,
+      [closure_reason || null, effectiveness_verified === true || effectiveness_verified === 'true', req.params.id]
+    );
+
+    await pool.query(
+      'INSERT INTO audit_logs (user_name, action, entity_type, entity_id, details, ip_address) VALUES ($1,$2,$3,$4,$5,$6)',
+      [
+        req.user.name,
+        'CAPA_CLOSURE',
+        'capa_record',
+        req.params.id,
+        `Closed CAPA: ${existing.rows[0].title} | Effectiveness verified: ${effectiveness_verified}`,
+        req.ip,
+      ]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Close CAPA error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/capa/:id - admin/quality_manager only
+router.delete('/:id', requireRole('admin', 'quality_manager'), async (req, res) => {
   try {
     const result = await pool.query('DELETE FROM capa_records WHERE id = $1 RETURNING *', [req.params.id]);
     if (result.rows.length === 0) {
