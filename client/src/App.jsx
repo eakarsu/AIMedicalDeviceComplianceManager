@@ -17,6 +17,7 @@ import {
   FiGrid,
   FiLogOut,
   FiShield,
+  FiRadio,
 } from 'react-icons/fi';
 import { login as loginApi, getMe } from './services/api';
 
@@ -35,6 +36,12 @@ import NonconformancePage from './pages/NonConformancePage';
 import ChangeControlsPage from './pages/ChangeControlsPage';
 import CalibrationPage from './pages/CalibrationPage';
 import AIToolsPage from './pages/AIToolsPage';
+import UdiRecallTracePage from './pages/UdiRecallTracePage';
+
+import CodexCustomVizFeature from './pages/CodexCustomVizFeature';
+import CodexOperationsFeature from './pages/CodexOperationsFeature';
+
+import TimelineView from './pages/TimelineView';
 
 // ─── Login Page ──────────────────────────────────────────────────────────────
 
@@ -151,6 +158,7 @@ const navSections = [
       { path: '/nonconformance', label: 'Non-Conformance', icon: FiAlertCircle },
       { path: '/change-controls', label: 'Change Controls', icon: FiGitPullRequest },
       { path: '/calibration', label: 'Calibration', icon: FiThermometer },
+      { path: '/udi-recall-trace', label: 'UDI Recall Trace', icon: FiRadio },
     ],
   },
   {
@@ -287,6 +295,10 @@ function App() {
         <Header user={user} onLogout={handleLogout} />
         <div className="page-content">
           <Routes>
+        <Route path="/insights/timeline" element={<TimelineView />} />
+        <Route path="/codex/custom-viz" element={<CodexCustomVizFeature />} />
+        <Route path="/codex/operations" element={<CodexOperationsFeature />} />
+
             <Route path="/dashboard" element={<Dashboard user={user} />} />
             <Route path="/devices" element={<DevicesPage />} />
             <Route path="/standards" element={<StandardsPage />} />
@@ -300,6 +312,7 @@ function App() {
             <Route path="/nonconformance" element={<NonconformancePage />} />
             <Route path="/change-controls" element={<ChangeControlsPage />} />
             <Route path="/calibration" element={<CalibrationPage />} />
+            <Route path="/udi-recall-trace" element={<UdiRecallTracePage />} />
             <Route path="/ai-tools" element={<AIToolsPage />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>

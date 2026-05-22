@@ -62,6 +62,7 @@ app.use('/api/nonconformance', require('./routes/nonconformance'));
 app.use('/api/change-controls', require('./routes/change-controls'));
 app.use('/api/calibration', require('./routes/calibration'));
 app.use('/api/ai', require('./routes/ai'));
+app.use('/api/udi-recall-trace', require('./routes/udi-recall-trace'));
 
 // Health check
 app.get('/api/health', (req, res) => {
