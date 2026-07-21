@@ -1,139 +1,32 @@
-#!/bin/bash
-
-# ═══════════════════════════════════════════════════════════════════════════
-# AI Medical Device Compliance Manager - Start Script
-# ═══════════════════════════════════════════════════════════════════════════
-
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BACKEND_PORT=4000
-FRONTEND_PORT=3000
+BACKEND_PORT="${BACKEND_PORT:-4000}"
+FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+CHILD_PIDS=()
 
-echo "╔═══════════════════════════════════════════════════════════════════╗"
-echo "║   AI Medical Device Compliance Manager - Starting...            ║"
-echo "╚═══════════════════════════════════════════════════════════════════╝"
-echo ""
-
-# ─── Step 1: Clean up used ports ──────────────────────────────────────────
-echo "🔧 Cleaning up ports $BACKEND_PORT and $FRONTEND_PORT..."
-
-cleanup_port() {
-  local port=$1
-  local pids=$(lsof -ti:$port 2>/dev/null || true)
-  if [ -n "$pids" ]; then
-    echo "   Killing processes on port $port: $pids"
-    echo "$pids" | xargs kill -9 2>/dev/null || true
-    sleep 1
-  else
-    echo "   Port $port is free"
+require_file() { [ -f "$1" ] || { echo "Missing required file: $1" >&2; exit 1; }; }
+require_dir() { [ -d "$1" ] || { echo "Missing dependencies: $1 (install explicitly before startup)" >&2; exit 1; }; }
+port_free() {
+  if command -v lsof >/dev/null 2>&1 && lsof -ti ":$1" >/dev/null 2>&1; then
+    echo "Port $1 is already in use; refusing to terminate another process." >&2
+    exit 1
   fi
 }
+cleanup() { for pid in "${CHILD_PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null || true; done; }
+trap cleanup INT TERM EXIT
 
-cleanup_port $BACKEND_PORT
-cleanup_port $FRONTEND_PORT
-echo ""
+require_file "$PROJECT_DIR/.env"
+require_dir "$PROJECT_DIR/server/node_modules"
+require_dir "$PROJECT_DIR/client/node_modules"
+port_free "$BACKEND_PORT"
+port_free "$FRONTEND_PORT"
 
-# ─── Step 2: Check PostgreSQL ─────────────────────────────────────────────
-echo "🐘 Checking PostgreSQL..."
-if command -v pg_isready &> /dev/null; then
-  if pg_isready -q 2>/dev/null; then
-    echo "   PostgreSQL is running"
-  else
-    echo "   Starting PostgreSQL..."
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-      brew services start postgresql@14 2>/dev/null || brew services start postgresql 2>/dev/null || true
-    else
-      sudo service postgresql start 2>/dev/null || true
-    fi
-    sleep 2
-  fi
-else
-  echo "   pg_isready not found, assuming PostgreSQL is running"
-fi
-echo ""
+(cd "$PROJECT_DIR/server" && PORT="$BACKEND_PORT" node index.js) &
+CHILD_PIDS+=("$!")
+(cd "$PROJECT_DIR/client" && npm run dev -- --port "$FRONTEND_PORT") &
+CHILD_PIDS+=("$!")
 
-# ─── Step 3: Create database if not exists ────────────────────────────────
-echo "📦 Setting up database..."
-DB_NAME="medical_compliance"
-if psql -U postgres -lqt 2>/dev/null | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
-  echo "   Database '$DB_NAME' already exists"
-else
-  echo "   Creating database '$DB_NAME'..."
-  createdb -U postgres "$DB_NAME" 2>/dev/null || psql -U postgres -c "CREATE DATABASE $DB_NAME;" 2>/dev/null || echo "   Could not create DB - it may already exist or need manual creation"
-fi
-echo ""
-
-# ─── Step 4: Install dependencies ─────────────────────────────────────────
-echo "📥 Installing backend dependencies..."
-cd "$PROJECT_DIR/server"
-npm install --silent 2>&1 | tail -1
-echo ""
-
-echo "📥 Installing frontend dependencies..."
-cd "$PROJECT_DIR/client"
-npm install --silent 2>&1 | tail -1
-echo ""
-
-# ─── Step 5: Seed the database ────────────────────────────────────────────
-echo "🌱 Seeding database with sample data..."
-cd "$PROJECT_DIR/server"
-node seed.js
-echo ""
-
-# ─── Step 6: Start backend with hot reload (nodemon) ─────────────────────
-echo "🚀 Starting backend server on port $BACKEND_PORT (with hot reload)..."
-cd "$PROJECT_DIR/server"
-npx nodemon index.js &
-BACKEND_PID=$!
-echo "   Backend PID: $BACKEND_PID"
-echo ""
-
-# Wait for backend to be ready
-echo "⏳ Waiting for backend to be ready..."
-for i in {1..30}; do
-  if curl -s http://localhost:$BACKEND_PORT/api/health > /dev/null 2>&1; then
-    echo "   Backend is ready!"
-    break
-  fi
-  sleep 1
-done
-echo ""
-
-# ─── Step 7: Start frontend with hot reload (Vite) ───────────────────────
-echo "🚀 Starting frontend on port $FRONTEND_PORT (with hot reload)..."
-cd "$PROJECT_DIR/client"
-npx vite --port $FRONTEND_PORT &
-FRONTEND_PID=$!
-echo "   Frontend PID: $FRONTEND_PID"
-echo ""
-
-# ─── Done ─────────────────────────────────────────────────────────────────
-sleep 3
-echo "╔═══════════════════════════════════════════════════════════════════╗"
-echo "║   Application is running!                                       ║"
-echo "║                                                                 ║"
-echo "║   Frontend:  http://localhost:$FRONTEND_PORT                        ║"
-echo "║   Backend:   http://localhost:$BACKEND_PORT                        ║"
-echo "║                                                                 ║"
-echo "║   Login:     admin@medcompliance.com / password123              ║"
-echo "║                                                                 ║"
-echo "║   Press Ctrl+C to stop all services                            ║"
-echo "╚═══════════════════════════════════════════════════════════════════╝"
-
-# ─── Graceful shutdown ────────────────────────────────────────────────────
-cleanup() {
-  echo ""
-  echo "🛑 Shutting down..."
-  kill $BACKEND_PID 2>/dev/null || true
-  kill $FRONTEND_PID 2>/dev/null || true
-  cleanup_port $BACKEND_PORT
-  cleanup_port $FRONTEND_PORT
-  echo "   Goodbye!"
-  exit 0
-}
-
-trap cleanup SIGINT SIGTERM
-
-# Keep script running
-wait
+echo "Medical-device services started without installing, seeding, migrating, or reclaiming ports."
+wait "${CHILD_PIDS[@]}"

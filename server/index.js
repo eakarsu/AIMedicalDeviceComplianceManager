@@ -7,14 +7,18 @@ require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const app = express();
 const PORT = process.env.PORT || 4000;
 const pool = require('./db');
+const { validateRuntime } = require('./governance/runtime');
+const governanceRouter = require('./governance/router');
+const { createProviderGate } = require('./governance/providerGate');
+
+validateRuntime();
 
 // Security middleware
 app.use(helmet());
-app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
-  credentials: true,
-}));
+const allowedOrigins = String(process.env.CORS_ORIGINS || process.env.CLIENT_URL || 'http://localhost:5173').split(',').map((value) => value.trim()).filter(Boolean);
+app.use(cors({ origin:(origin,callback)=>!origin||allowedOrigins.includes(origin)?callback(null,true):callback(new Error('Origin not allowed by CORS')),credentials:true }));
 app.use(express.json());
+app.use(createProviderGate(['/api/ai','/api/regulatory-advisor-agent','/api/vision-document-verify','/api/audit-anomaly-stream','/api/capa-autonomous','/api/regulatory-intel-agent']));
 
 // Create required tables at startup
 async function initDb() {
@@ -45,7 +49,7 @@ async function initDb() {
     console.error('DB init error (non-fatal):', err.message);
   }
 }
-initDb();
+if (process.env.ENABLE_LEGACY_SCHEMA_BOOTSTRAP === 'true') initDb();
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
@@ -63,6 +67,7 @@ app.use('/api/change-controls', require('./routes/change-controls'));
 app.use('/api/calibration', require('./routes/calibration'));
 app.use('/api/ai', require('./routes/ai'));
 app.use('/api/udi-recall-trace', require('./routes/udi-recall-trace'));
+app.use('/api/governed-device-compliance', governanceRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -91,16 +96,4 @@ app.use('/api/audit-anomaly-stream', require('./routes/audit-anomaly-stream'));
 app.use('/api/capa-autonomous', require('./routes/capa-autonomous'));
 app.use('/api/regulatory-intel-agent', require('./routes/regulatory-intel-agent'));
 
-// === Batch 05 Gaps & Frontend Mounts ===
-try { const _gap_submission_review = require('./routes/gap-submission-review'); app.use('/api/gap-submission-review', _gap_submission_review); } catch(e) { console.error('gap mount fail submission-review:', e.message); }
-try { const _gap_recall_response = require('./routes/gap-recall-response'); app.use('/api/gap-recall-response', _gap_recall_response); } catch(e) { console.error('gap mount fail recall-response:', e.message); }
-try { const _gap_complaint_analysis = require('./routes/gap-complaint-analysis'); app.use('/api/gap-complaint-analysis', _gap_complaint_analysis); } catch(e) { console.error('gap mount fail complaint-analysis:', e.message); }
-try { const _gap_post_market_surveillance = require('./routes/gap-post-market-surveillance'); app.use('/api/gap-post-market-surveillance', _gap_post_market_surveillance); } catch(e) { console.error('gap mount fail post-market-surveillance:', e.message); }
-try { const _gap_document = require('./routes/gap-document'); app.use('/api/gap-document', _gap_document); } catch(e) { console.error('gap mount fail document:', e.message); }
-try { const _gap_third_party = require('./routes/gap-third-party'); app.use('/api/gap-third-party', _gap_third_party); } catch(e) { console.error('gap mount fail third-party:', e.message); }
-try { const _gap_automated = require('./routes/gap-automated'); app.use('/api/gap-automated', _gap_automated); } catch(e) { console.error('gap mount fail automated:', e.message); }
-try { const _gap_erp = require('./routes/gap-erp'); app.use('/api/gap-erp', _gap_erp); } catch(e) { console.error('gap mount fail erp:', e.message); }
-try { const _gap_mobile = require('./routes/gap-mobile'); app.use('/api/gap-mobile', _gap_mobile); } catch(e) { console.error('gap mount fail mobile:', e.message); }
-try { const _gap_supplier = require('./routes/gap-supplier'); app.use('/api/gap-supplier', _gap_supplier); } catch(e) { console.error('gap mount fail supplier:', e.message); }
-try { const _gap_patient = require('./routes/gap-patient'); app.use('/api/gap-patient', _gap_patient); } catch(e) { console.error('gap mount fail patient:', e.message); }
-// === End Batch 05 Mounts ===
+// Generated gap routes are quarantined: no mounts until durable provider contracts and acceptance tests exist.
