@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
+const bcrypt = require('bcryptjs');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();
@@ -22,8 +23,41 @@ app.use(createProviderGate(['/api/ai','/api/regulatory-advisor-agent','/api/visi
 
 // Create required tables at startup
 async function initDb() {
-  try {
-    await pool.query(`
+  if (process.env.MIGRATE_ON_START !== 'true' && process.env.ENABLE_LEGACY_SCHEMA_BOOTSTRAP !== 'true') return;
+  const email = process.env.PROVISION_ADMIN_EMAIL || process.env.ADMIN_EMAIL;
+  const password = process.env.PROVISION_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD;
+  if (!email || !password) throw new Error('Runtime admin credentials are required');
+  await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        role VARCHAR(50) NOT NULL DEFAULT 'admin',
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id SERIAL PRIMARY KEY,
+        user_name VARCHAR(255),
+        action VARCHAR(255) NOT NULL,
+        entity_type VARCHAR(255),
+        entity_id INTEGER,
+        details TEXT,
+        ip_address VARCHAR(64),
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS ai_analyses (
+        id SERIAL PRIMARY KEY,
+        analysis_type VARCHAR(100),
+        entity_type VARCHAR(255),
+        entity_id INTEGER,
+        prompt TEXT,
+        result TEXT,
+        model_used VARCHAR(255),
+        created_at TIMESTAMP DEFAULT NOW()
+      );
       CREATE TABLE IF NOT EXISTS document_versions (
         id SERIAL PRIMARY KEY,
         document_id INTEGER,
@@ -44,12 +78,15 @@ async function initDb() {
     await pool.query(`
       ALTER TABLE capa_records ADD COLUMN IF NOT EXISTS effectiveness_verified BOOLEAN DEFAULT FALSE
     `).catch(() => {});
-    console.log('Database tables initialized');
-  } catch (err) {
-    console.error('DB init error (non-fatal):', err.message);
-  }
+  const passwordHash = await bcrypt.hash(password, 10);
+  await pool.query(
+    `INSERT INTO users (email, password, name, role)
+     VALUES ($1, $2, $3, 'admin')
+     ON CONFLICT (email) DO UPDATE SET password = EXCLUDED.password, name = EXCLUDED.name, role = EXCLUDED.role, updated_at = NOW()`,
+    [email, passwordHash, process.env.PROVISION_ADMIN_NAME || 'Runtime Administrator']
+  );
+  console.log('Database tables initialized');
 }
-if (process.env.ENABLE_LEGACY_SCHEMA_BOOTSTRAP === 'true') initDb();
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
@@ -83,9 +120,12 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+initDb()
+  .then(() => app.listen(PORT, () => console.log(`Server running on port ${PORT}`)))
+  .catch((error) => {
+    console.error('Runtime initialization failed:', error.message);
+    process.exit(1);
+  });
 
 module.exports = app;
 

@@ -15,12 +15,13 @@ async function callOpenRouter(messages) {
     err.status = 503;
     throw err;
   }
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const baseUrl = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
       'Content-Type': 'application/json',
-      'HTTP-Referer': 'http://localhost:4000',
+      'HTTP-Referer': process.env.CLIENT_URL || 'http://localhost:4000',
       'X-Title': 'AI Medical Device Compliance Manager',
     },
     body: JSON.stringify({
