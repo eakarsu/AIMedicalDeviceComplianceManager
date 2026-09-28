@@ -18,10 +18,13 @@ export default function LoginPage({ onLogin }) {
     try {
       await onLogin(email, password);
     } catch (err) {
+      const serviceUnavailable = !err.response || err.response.status >= 500;
       setError(
-        err.response?.data?.message ||
-          err.message ||
-          'Login failed. Please check your credentials.'
+        err.response?.data?.error ||
+          err.response?.data?.message ||
+          (serviceUnavailable
+            ? 'The login service is unavailable. Confirm the API and database are running, then try again.'
+            : 'Login failed. Please check your credentials.')
       );
     } finally {
       setLoading(false);
@@ -294,7 +297,7 @@ export default function LoginPage({ onLogin }) {
             }}
           >
             <FiZap size={14} />
-            Auto-Fill Credentials
+            Auto Fill Demo Credentials
           </button>
         </form>
       </div>

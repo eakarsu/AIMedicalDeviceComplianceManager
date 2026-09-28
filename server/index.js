@@ -17,7 +17,25 @@ validateRuntime();
 // Security middleware
 app.use(helmet());
 const allowedOrigins = String(process.env.CORS_ORIGINS || process.env.CLIENT_URL || 'http://localhost:5173').split(',').map((value) => value.trim()).filter(Boolean);
-app.use(cors({ origin:(origin,callback)=>!origin||allowedOrigins.includes(origin)?callback(null,true):callback(new Error('Origin not allowed by CORS')),credentials:true }));
+function normalizedOrigin(value) {
+  try {
+    const parsed = new URL(value);
+    const hostname = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname) ? 'local-loopback' : parsed.hostname;
+    return `${parsed.protocol}//${hostname}:${parsed.port || (parsed.protocol === 'https:' ? '443' : '80')}`;
+  } catch {
+    return value;
+  }
+}
+const allowedOriginKeys = allowedOrigins.map(normalizedOrigin);
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOriginKeys.includes(normalizedOrigin(origin))) return callback(null, true);
+    const error = new Error('Origin not allowed by CORS');
+    error.status = 403;
+    return callback(error);
+  },
+  credentials: true,
+}));
 app.use(express.json());
 app.use(createProviderGate(['/api/ai','/api/regulatory-advisor-agent','/api/vision-document-verify','/api/audit-anomaly-stream','/api/capa-autonomous','/api/regulatory-intel-agent']));
 

@@ -78,6 +78,7 @@ set -a
 set +a
 BACKEND_PORT="${BACKEND_PORT:-${PORT:-4000}}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+export VITE_PROXY_TARGET="${VITE_PROXY_TARGET:-http://127.0.0.1:$BACKEND_PORT}"
 require_dir "$PROJECT_DIR/server/node_modules"
 require_dir "$PROJECT_DIR/client/node_modules"
 port_free "$BACKEND_PORT"
