@@ -35,7 +35,7 @@ export default function ChecklistsPage() {
     setLoading(true);
     try {
       const data = await getChecklists();
-      setItems(Array.isArray(data) ? data : data.data || []);
+      setItems(Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []);
     } catch (e) { console.error(e); }
     setLoading(false);
   };

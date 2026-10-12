@@ -32,8 +32,14 @@ export default function LoginPage({ onLogin }) {
   };
 
   const handleAutoFill = () => {
-    setEmail(import.meta.env.VITE_DEMO_EMAIL || '');
-    setPassword(import.meta.env.VITE_DEMO_PASSWORD || '');
+    const demoEmail = import.meta.env.VITE_DEMO_EMAIL;
+    const demoPassword = import.meta.env.VITE_DEMO_PASSWORD;
+    if (!demoEmail || !demoPassword) {
+      setError('Demo credentials are not configured for this browser build. Ask an administrator for access.');
+      return;
+    }
+    setEmail(demoEmail);
+    setPassword(demoPassword);
     setError('');
   };
 
@@ -297,7 +303,7 @@ export default function LoginPage({ onLogin }) {
             }}
           >
             <FiZap size={14} />
-            Auto Fill Demo Credentials
+            Fill Demo Credentials
           </button>
         </form>
       </div>

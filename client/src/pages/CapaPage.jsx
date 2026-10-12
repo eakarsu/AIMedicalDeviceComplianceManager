@@ -85,8 +85,8 @@ export default function CapaPage() {
     setLoading(true);
     try {
       const [capaRes, devRes] = await Promise.all([getCapas(), getDevices()]);
-      setItems(Array.isArray(capaRes) ? capaRes : capaRes.data || []);
-      setDevices(Array.isArray(devRes) ? devRes : devRes.data || []);
+      setItems(Array.isArray(capaRes) ? capaRes : Array.isArray(capaRes?.data) ? capaRes.data : []);
+      setDevices(Array.isArray(devRes) ? devRes : Array.isArray(devRes?.data) ? devRes.data : []);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);

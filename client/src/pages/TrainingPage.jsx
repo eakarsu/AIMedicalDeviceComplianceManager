@@ -66,7 +66,7 @@ export default function TrainingPage() {
     setLoading(true);
     try {
       const res = await getTraining();
-      setItems(Array.isArray(res) ? res : res.data || []);
+      setItems(Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);

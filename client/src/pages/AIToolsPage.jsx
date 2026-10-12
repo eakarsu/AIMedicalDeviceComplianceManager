@@ -7,10 +7,11 @@ import {
 } from 'react-icons/fi';
 import api from '../services/api';
 import { getDevices, getStandards, getDocuments } from '../services/api';
+import AIReport from '../components/AIReport';
 
 // ─── AI Tool Definitions with Sample Data ──────────────────────────────────
 
-const CATEGORIES = [
+export const CATEGORIES = [
   {
     id: 'device', label: 'Device Intelligence', icon: FiMonitor, color: '#1a73e8',
     tools: [
@@ -355,6 +356,35 @@ const CATEGORIES = [
 
 // ─── Format AI Output ───────────────────────────────────────────────────────
 
+export function fillNativeSample(tool, sample, current, getOptions, getLabel) {
+  const index = tool.samples.indexOf(sample);
+  const recordTypes = new Set(['device', 'standard', 'document', 'riskAssessment', 'capa', 'supplier', 'ncr', 'changeControl', 'calibration']);
+  const missing = [];
+  const filled = { ...current };
+  tool.inputs.forEach(input => {
+    if (recordTypes.has(input.type)) {
+      const options = getOptions(input.type);
+      const valid = value => options.some(option => String(option.value) === String(value));
+      // Keep a real selected record; never treat a seed example's ID as a live reference.
+      const selected = valid(current[input.key]) ? current[input.key] : options[index % options.length]?.value;
+      filled[input.key] = selected ?? '';
+      if (selected === undefined) missing.push(getLabel(input));
+    } else if (input.type === 'departmentSelect') {
+      filled[input.key] = sample.values[input.key] || ['Quality Assurance', 'Engineering', 'Regulatory Affairs'][index % 3];
+    } else if (input.type === 'select') {
+      filled[input.key] = sample.values[input.key] ?? input.options?.[index % input.options.length] ?? '';
+    } else if (input.type === 'number') {
+      filled[input.key] = sample.values[input.key] ?? input.defaultValue ?? [30, 60, 90][index % 3];
+    } else {
+      filled[input.key] = sample.values[input.key] ?? (
+        /date/i.test(input.key) ? new Date(Date.now() + (index + 1) * 86400000).toISOString().slice(0, 10)
+          : `${tool.title} example: ${sample.label}. Describe the available evidence, intended use, and any missing details for review.`
+      );
+    }
+  });
+  return { filled, missing };
+}
+
 function formatAIOutput(text) {
   if (!text) return null;
   const sections = [];
@@ -571,7 +601,7 @@ export default function AIToolsPage() {
   const [searchParams] = useSearchParams();
 
   useEffect(() => {
-    const normalize = (r) => Array.isArray(r) ? r : (r?.data || []);
+    const normalize = (r) => Array.isArray(r) ? r : Array.isArray(r?.data) ? r.data : [];
     Promise.all([
       getDevices().then(r => setDevices(normalize(r))).catch(() => {}),
       getStandards().then(r => setStandards(normalize(r))).catch(() => {}),
@@ -632,9 +662,10 @@ export default function AIToolsPage() {
   };
 
   const loadSample = (sample) => {
-    setFormValues({ ...sample.values });
+    const { filled, missing } = fillNativeSample(activeTool, sample, formValues, getDropdownOptions, getInputLabel);
+    setFormValues(filled);
     setResult(null);
-    setError('');
+    setError(missing.length ? `Select an existing record for: ${missing.join(', ')}. No record was created or assumed.` : '');
   };
 
   const getDropdownOptions = (inputType) => {
@@ -678,10 +709,13 @@ export default function AIToolsPage() {
     if (!activeTool) return false;
     if (activeTool.inputs.length === 0) return true;
     return activeTool.inputs.every(input => {
-      if (input.type === 'number') return true;
+      if (input.type === 'number') return formValues[input.key] !== '' && formValues[input.key] !== undefined;
       if (input.type === 'departmentSelect') return true;
       if (input.label && input.label.includes('optional')) return true;
       const val = formValues[input.key];
+      if (['device', 'standard', 'document', 'riskAssessment', 'capa', 'supplier', 'ncr', 'changeControl', 'calibration'].includes(input.type)) {
+        return getDropdownOptions(input.type).some(option => String(option.value) === String(val));
+      }
       if (!val || (typeof val === 'string' && !val.trim())) return false;
       return true;
     });
@@ -697,13 +731,13 @@ export default function AIToolsPage() {
       activeTool.inputs.forEach(input => {
         const val = formValues[input.key];
         if (input.type === 'number') {
-          body[input.key] = Number(val) || input.defaultValue || 30;
-        } else if (val) {
+          body[input.key] = val === '' || val === undefined ? (input.defaultValue ?? 30) : Number(val);
+        } else if (val !== undefined && val !== null) {
           body[input.key] = val;
         }
       });
       const res = await api.post(activeTool.endpoint, body);
-      setResult(res.data.analysis || res.data);
+      setResult(res.data.analysis ?? res.data);
     } catch (e) {
       setError(e.response?.data?.error || e.message || 'Analysis failed');
     }
@@ -904,6 +938,7 @@ export default function AIToolsPage() {
                           ...styles.sampleBtn,
                           borderColor: formValues === sample.values ? activeTool.categoryColor : '#e0e4e8',
                         }}
+                        type="button"
                         onClick={() => loadSample(sample)}
                         onMouseEnter={e => { e.currentTarget.style.borderColor = activeTool.categoryColor; e.currentTarget.style.background = activeTool.categoryColor + '08'; e.currentTarget.style.color = activeTool.categoryColor; }}
                         onMouseLeave={e => { e.currentTarget.style.borderColor = '#e0e4e8'; e.currentTarget.style.background = '#fafafa'; e.currentTarget.style.color = '#444'; }}
@@ -954,7 +989,7 @@ export default function AIToolsPage() {
             )}
 
             {/* Result */}
-            {result && !loading && (
+            {result !== null && result !== undefined && !loading && (
               <div style={styles.resultCard}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 12, borderBottom: '1px solid #eee', flexWrap: 'wrap', gap: 8 }}>
                   <div style={{
@@ -981,9 +1016,7 @@ export default function AIToolsPage() {
                   <RiskStructuredDisplay data={result.structured} />
                 )}
 
-                <div className="ai-result-body">
-                  {formatAIOutput(result.result || result.content || (typeof result === 'string' ? result : JSON.stringify(result)))}
-                </div>
+                <div className="ai-result-body"><AIReport response={result} title={activeTool.title} /></div>
               </div>
             )}
           </div>

@@ -40,8 +40,8 @@ export default function DevicesPage() {
     setLoading(true);
     try {
       const data = await getDevices({ page: p || page, limit: 50 });
-      setItems(Array.isArray(data) ? data : data.data || []);
-      setPagination(data.pagination || null);
+      setItems(Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []);
+      setPagination(data?.pagination || null);
     } catch (e) { console.error(e); }
     setLoading(false);
   };

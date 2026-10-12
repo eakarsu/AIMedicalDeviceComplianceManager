@@ -23,7 +23,7 @@ export default function ChangeControlsPage() {
   const loadData = async () => {
     try {
       const [r1, r2] = await Promise.all([getChangeControls(), getDevices()]);
-      setItems(Array.isArray(r1) ? r1 : r1.data || []); setDevices(Array.isArray(r2) ? r2 : r2.data || []);
+      setItems(Array.isArray(r1) ? r1 : Array.isArray(r1?.data) ? r1.data : []); setDevices(Array.isArray(r2) ? r2 : Array.isArray(r2?.data) ? r2.data : []);
     } catch (e) { console.error(e); }
     setLoading(false);
   };

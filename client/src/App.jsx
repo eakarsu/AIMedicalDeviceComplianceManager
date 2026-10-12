@@ -1,3 +1,4 @@
+import AIReportLibrary from "./components/AIReportLibrary";
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom';
 import {
@@ -74,8 +75,15 @@ function LoginPage({ onLogin }) {
   };
 
   const handleAutoFill = () => {
-    setEmail(import.meta.env.VITE_DEMO_EMAIL || '');
-    setPassword(import.meta.env.VITE_DEMO_PASSWORD || '');
+    const demoEmail = import.meta.env.VITE_DEMO_EMAIL;
+    const demoPassword = import.meta.env.VITE_DEMO_PASSWORD;
+    if (!demoEmail || !demoPassword) {
+      setError('Demo credentials are not configured for this browser build. Ask an administrator for access.');
+      return;
+    }
+    setEmail(demoEmail);
+    setPassword(demoPassword);
+    setError('');
   };
 
   return (
@@ -122,7 +130,7 @@ function LoginPage({ onLogin }) {
         </form>
 
         <button type="button" className="auto-fill-btn" onClick={handleAutoFill}>
-          Auto Fill Demo Credentials
+          Fill Demo Credentials
         </button>
       </div>
     </div>
@@ -219,7 +227,7 @@ function Sidebar() {
           </div>
         ))}
       </div>
-    </nav>
+    <AIReportLibrary /></nav>
   );
 }
 

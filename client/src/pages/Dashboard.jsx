@@ -62,7 +62,7 @@ export default function Dashboard() {
         const extract = (result) => {
           if (result.status !== 'fulfilled') return [];
           const d = result.value;
-          return Array.isArray(d) ? d : d?.data ?? d?.items ?? [];
+          return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : Array.isArray(d?.items) ? d.items : [];
         };
 
         const devicesList = extract(devicesRes);
